@@ -1,0 +1,272 @@
+---
+title: "CDC 2023"
+output: html_document
+date: "2023-09-30"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(purrr)
+library(dplyr)
+library(broom)
+library(glmnet)
+library(modelr)
+library(kableExtra)
+```
+
+```{r}
+data<-read.csv("HealthSciences_Dataset.csv")
+
+
+```
+
+```{r}
+data$readmittednum[data$readmitted==">30"]<-1
+data$readmittednum[data$readmitted=="<30"]<-1
+data$readmittednum[data$readmitted=="NO"]<-0
+
+data$readmittedyn[data$readmitted==">30"]="Yes"
+data$readmittedyn[data$readmitted=="<30"]="Yes"
+data$readmittedyn[data$readmitted=="NO"]="No"
+data$race[data$race=="?"]<-"Unknown"
+
+
+```
+
+```{r}
+
+#grouping discharge reasons
+data$discharge_type[data$discharge_disposition_id == 1] <- "Home"
+data$discharge_type[data$discharge_disposition_id == 6 | 
+                      data$discharge_disposition_id == 8] <- "Home Health Service"
+data$discharge_type[data$discharge_disposition_id == 13 | 
+                      data$discharge_disposition_id == 14] <- "Hospice"
+data$discharge_type[data$discharge_disposition_id == 24] <- "Nursing Facility"
+data$discharge_type[data$discharge_disposition_id == 2 |
+                      data$discharge_disposition_id == 3 | 
+                      data$discharge_disposition_id == 4 | 
+                      data$discharge_disposition_id == 5 |
+                      data$discharge_disposition_id == 22 |
+                      data$discharge_disposition_id == 30 | 
+                      data$discharge_disposition_id == 27 | 
+                      data$discharge_disposition_id == 28 | 
+                      data$discharge_disposition_id == 29] <- "Other Healthcare Institution"
+data$discharge_type[data$discharge_disposition_id == 23] <- "Long-term Care"
+data$discharge_type[data$discharge_disposition_id == 9 | 
+                      data$discharge_disposition_id == 15] <- "Internal Reassignment"
+data$discharge_type[data$discharge_disposition_id == 12 | 
+                      data$discharge_disposition_id == 16 | 
+                      data$discharge_disposition_id == 17] <- "Outpatient Services"
+data$discharge_type[data$discharge_disposition_id == 11 | 
+                      data$discharge_disposition_id == 19 | 
+                      data$discharge_disposition_id == 20 | 
+                      data$discharge_disposition_id == 21] <- "Passed Away"
+data$discharge_type[data$discharge_disposition_id == 7] <- "Left"
+data$discharge_type[data$discharge_disposition_id == 10] <- "Other"
+data$discharge_type[data$discharge_disposition_id == 18 | 
+                      data$discharge_disposition_id == 25 | 
+                      data$discharge_disposition_id == 26] <- "Unknown"
+
+boxplot(time_in_hospital~readmittedyn,data=data,las=2)
+boxplot(time_in_hospital~readmittedyn,data=data)$stats
+```
+
+```{r}
+nonreadmittants_by_discharge <- data %>%
+  filter(readmittednum == 0) %>%
+  group_by(discharge_type)
+
+readmittants_by_discharge <- data %>%
+  filter(readmittednum == 1) %>%
+  group_by(discharge_type) 
+
+ggplot(nonreadmittants_by_discharge, aes(x = discharge_type)) +
+    geom_bar() +
+  theme(axis.text.x=element_text(angle = 90))+ 
+  ylim(0,35000)
+
+ggplot(readmittants_by_discharge, aes(x = discharge_type)) +
+    geom_bar() +
+  theme(axis.text.x=element_text(angle = 90))+ 
+  ylim(0,35000)
+```
+
+```{r}
+
+data<- data%>%
+  select(encounter_id,race,gender,age,time_in_hospital,num_lab_procedures,num_procedures,num_medications,number_outpatient,number_emergency,number_inpatient,diabetesMed,readmittednum, readmittedyn)
+
+data$diabetesMednum[data$diabetesMed=="No"]<-0
+data$diabetesMednum[data$diabetesMed=="Yes"]<-1
+
+
+data$agenum[data$age=="[0-10)"]<-0
+data$agenum[data$age=="[10-20)"]<-1
+data$agenum[data$age=="[20-30)"]<-2
+data$agenum[data$age=="[30-40)"]<-3
+data$agenum[data$age=="[40-50)"]<-4
+data$agenum[data$age=="[50-60)"]<-5
+data$agenum[data$age=="[60-70)"]<-6
+data$agenum[data$age=="[70-80)"]<-7
+data$agenum[data$age=="[80-90)"]<-8
+data$agenum[data$age=="[90-100)"]<-9
+
+sum(data$readmittednum==1)/nrow(data)
+  
+data_final<-data%>%
+  select(encounter_id,agenum,time_in_hospital,num_lab_procedures, num_procedures, num_medications, number_outpatient, number_inpatient, diabetesMednum, readmittednum)
+```
+
+```{r}
+ggplot(data, aes(x = readmittedyn, fill = race)) + 
+  geom_bar()
+
+ggplot(data, aes(x = readmittedyn, fill = gender)) + 
+  geom_bar() 
+
+ggplot(data, aes(x = readmittedyn, fill = age)) + 
+  geom_bar() 
+```
+
+
+
+```{r}
+RMSEfunc = function(residuals){
+  RMSE = sqrt(mean((residuals)^2))
+  return(RMSE)
+}
+MSEfunc = function(residuals){
+  MSE = mean((residuals)^2)
+  return(MSE)
+}
+MAEfunc = function(residuals) {
+  MAE = mean(abs(residuals))
+  return(MAE)
+}
+```
+
+
+
+```{r}
+train.model.func.empty=function(data){
+  mod=lm(readmittednum~ 1,data=data)
+  return(mod)
+}
+EmptyData <- na.omit(data_final) %>% crossv_kfold(10) %>% select(train, test)
+EmptyData1= EmptyData %>% 
+       mutate(tr.model=map(train,train.model.func.empty)) %>%
+    mutate(predict=map2(test,tr.model,~augment(.y,newdata=.x))) %>%
+  select(predict) %>%
+  unnest()
+
+
+RMSEEmptyData = RMSEfunc(EmptyData1$.resid)
+```
+
+
+
+```{r}
+y=data_final$readmittednum
+X=model_matrix(data_final[,2:10],readmittednum~.*.)[,-1]
+var.names=names(X)
+dim(X)
+
+```
+
+```{r}
+set.seed(216)
+cvmod.0=cv.glmnet(y=y,x=as.matrix(X),alpha=0)
+set.seed(216)
+cvmod.25=cv.glmnet(y=y,x=as.matrix(X),alpha=0.25)
+set.seed(216)
+cvmod.5=cv.glmnet(y=y,x=as.matrix(X),alpha=0.5)
+set.seed(216)
+cvmod.75=cv.glmnet(y=y,x=as.matrix(X),alpha=0.75)
+set.seed(216)
+cvmod.1=cv.glmnet(y=y,x=as.matrix(X),alpha=1)
+
+CV.0.ERROR=cvmod.0$cvm[which(cvmod.0$lambda==cvmod.0$lambda.1se)]
+CV.25.ERROR=cvmod.25$cvm[which(cvmod.25$lambda==cvmod.25$lambda.1se)]
+CV.5.ERROR=cvmod.5$cvm[which(cvmod.5$lambda==cvmod.5$lambda.1se)]
+CV.75.ERROR=cvmod.75$cvm[which(cvmod.75$lambda==cvmod.75$lambda.1se)]
+CV.1.ERROR=cvmod.1$cvm[which(cvmod.1$lambda==cvmod.1$lambda.1se)]
+
+MOD.RESULT=tibble(alpha=c(0,0.25,0.5,0.75,1),
+                  lambda=c(cvmod.0$lambda.1se,cvmod.25$lambda.1se,
+                           cvmod.5$lambda.1se,cvmod.75$lambda.1se,
+                           cvmod.1$lambda.1se),
+                  CV.Error=c(CV.0.ERROR,CV.25.ERROR,CV.5.ERROR,
+                             CV.75.ERROR,CV.1.ERROR))
+print(MOD.RESULT)
+```
+
+```{r}
+best.alpha=MOD.RESULT$alpha[which.min(MOD.RESULT$CV.Error)]
+best.lambda=MOD.RESULT$lambda[which.min(MOD.RESULT$CV.Error)]
+
+best.mod=glmnet(y=y,x=as.matrix(X),nlambda=1,lambda=best.lambda,alpha=best.alpha)
+best.coef=as.tibble(as.matrix(coef(best.mod)))
+best.coef2=best.coef %>% 
+              mutate(Parameter=c("Int",var.names)) %>%
+              rename(Estimate=s0) %>%
+              select(Parameter,Estimate)
+nonzero.best.coef=best.coef2 %>%
+                    filter(Estimate!=0)
+#print(nonzero.best.coef,n=1e3)
+
+data_final$readmitpredict=predict(best.mod,newx=as.matrix(X))
+RMSE = sqrt(mean((data_final$readmittednum-data_final$readmitpredict)^2))
+best.coef2 %>%
+  filter(Estimate != 0) %>%
+  kbl() %>%
+  kable_styling()
+
+
+
+```
+
+```{r}
+cor(data_final[,2:10], method= "pearson")
+
+
+```
+
+
+
+
+```{r}
+linmodfull = lm(readmittednum ~ agenum +time_in_hospital+num_lab_procedures+ num_procedures+num_medications+number_outpatient+ number_inpatient+diabetesMednum, data=data_final)
+summary(linmodfull)
+
+RMSEfunc(linmodfull$resid)
+MAEfunc(linmodfull$resid)
+MSEfunc(linmodfull$resid)
+
+
+ train.model.func.full=function(data){
+  mod=lm(readmittednum ~ agenum +time_in_hospital+num_lab_procedures+ num_procedures+num_medications+number_outpatient+ number_inpatient+diabetesMednum, data=data_final)
+  return(mod)
+ }
+ 
+FullData <- na.omit(data_final) %>% crossv_kfold(10) %>% select(train, test)
+FullData2= FullData %>% 
+       mutate(tr.model=map(train,train.model.func.full)) %>%
+    mutate(predict=map2(test,tr.model,~augment(.y,newdata=.x))) %>%
+  select(predict) %>%
+  unnest()
+
+RMSEFullData = RMSEfunc(FullData2$.resid)
+print(RMSEFullData)
+
+
+RMSEtable <- data.frame(Model=c('Model 1- Empty Model', 'Model 2- Elastic Net Model', 'Model 3- Full Model'),
+                 RMSE=rep(c(RMSEEmptyData, RMSE, RMSEFullData )))
+kable(RMSEtable)
+
+```
+
+This code was made in reference to STOR 320 classwork. 
